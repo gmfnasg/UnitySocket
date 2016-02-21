@@ -1,0 +1,150 @@
+using UnityEngine;
+using System.Collections;
+using System.Threading;
+using System.Net;
+using System.Net.Sockets;
+using System;
+using System.Text;
+
+public class Server{
+    //  在宣告區先行宣告 Socket 物件 
+    Socket[] SckSs;   // 一般而言 Server 端都會設計成可以多人同時連線. 
+    int SckCIndex;    // 定義一個指標用來判斷現下有哪一個空的 Socket 可以分配給 Client 端連線;
+    public static string LocalIP;
+    public static int SPort = 6101;
+
+    int clientAmount = 0;
+
+    public void RunMe()
+    {
+        Listen();
+    }
+
+    // 聆聽
+    private void Listen()
+    {
+        // 用 Resize 的方式動態增加 Socket 的數目
+        Array.Resize(ref SckSs, 1);
+
+        SckSs[0] = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+
+        SckSs[0].Bind(new IPEndPoint(IPAddress.Parse(LocalIP), SPort));
+
+        // 其中 LocalIP 和 SPort 分別為 string 和 int 型態, 前者為 Server 端的IP, 後者為S erver 端的Port
+        SckSs[0].Listen(10); // 進行聆聽; Listen( )為允許 Client 同時連線的最大數
+
+        SckSWaitAccept();   // 另外寫一個函數用來分配 Client 端的 Socket
+    }
+
+
+
+    // 等待Client連線
+    private void SckSWaitAccept()
+    {
+        // 判斷目前是否有空的 Socket 可以提供給Client端連線
+        bool FlagFinded = false;
+
+        for (int i = 1; i <= SckSs.Length - 1; i++)
+        {
+            // SckSs[i] 若不為 null 表示已被實作過, 判斷是否有 Client 端連線
+            if (SckSs[i] != null)
+            {
+                // 如果目前第 i 個 Socket 若沒有人連線, 便可提供給下一個 Client 進行連線
+                if (SckSs[i].Connected == false)
+                {
+                    SckCIndex = i;
+                    FlagFinded = true;
+                    break;
+                }
+            }
+        }
+
+        // 如果 FlagFinded 為 false 表示目前並沒有多餘的 Socket 可供 Client 連線
+        if (FlagFinded == false)
+        {
+            // 增加 Socket 的數目以供下一個 Client 端進行連線
+            SckCIndex = SckSs.Length;
+            Array.Resize(ref SckSs, SckCIndex + 1);
+        }
+
+        // 以下兩行為多執行緒的寫法, 因為接下來 Server 端的部份要使用 Accept() 讓 Cleint 進行連線;
+        // 該執行緒有需要時再產生即可, 因此定義為區域性的 Thread. 命名為 SckSAcceptTd;
+        // 在 new Thread( ) 裡為要多執行緒去執行的函數. 這裡命名為 SckSAcceptProc;
+        Thread SckSAcceptTd = new Thread(SckSAcceptProc);
+        SckSAcceptTd.Start();  // 開始執行 SckSAcceptTd 這個執行緒
+
+        // 這裡要點出 SckSacceptTd 這個執行緒會在 Start( ) 之後開始執行 SckSAcceptProc 裡的程式碼, 同時主程式的執行緒也會繼續往下執行各做各的. 
+        // 主程式不用等到 SckSAcceptProc 的程式碼執行完便會繼續往下執行.
+    }
+
+    // 接收來自Client的連線與Client傳來的資料
+    private void SckSAcceptProc()
+    {
+        // 這裡加入 try 是因為 SckSs[0] 若被 Close 的話, SckSs[0].Accept() 會產生錯誤
+        try
+        {
+            SckSs[SckCIndex] = SckSs[0].Accept();  // 等待Client 端連線
+
+            // 為什麼 Accept 部份要用多執行緒, 因為 SckSs[0] 會停在這一行程式碼直到有 Client 端連上線, 並分配給 SckSs[SckCIndex] 給 Client 連線之後程式才會繼續往下, 若是將 Accept 寫在主執行緒裡, 在沒有Client連上來之前, 主程式將會被hand在這一行無法再做任何事了!!
+
+
+            // 能來這表示有 Client 連上線. 記錄該 Client 對應的 SckCIndex
+
+            SckSSend("有客服端連上伺服器");
+
+            int Scki = SckCIndex;
+
+            // 再產生另一個執行緒等待下一個 Client 連線
+            SckSWaitAccept();
+
+            long IntAcceptData;
+
+            int RDataLen = 10;
+
+            byte[] clientData = new byte[RDataLen];  // 其中RDataLen為每次要接受來自 Client 傳來的資料長度
+
+            if(ConnectManager.DebubMode)
+                MonoBehaviour.print("RDataLen(int) Value(" + RDataLen + ")");
+
+            while (true)
+            {
+                // 程式會被 hand 在此, 等待接收來自 Client 端傳來的資料
+                IntAcceptData = SckSs[Scki].Receive(clientData);
+
+                if (ConnectManager.DebubMode)
+                    MonoBehaviour.print("IntAcceptData(long) Value("+ IntAcceptData + ")");
+
+                // 往下就自己寫接收到來自Client端的資料後要做什麼事唄~^^”
+                MonoBehaviour.print("FIXME 需實做接收clinet訊息的資料處理");
+            }
+        }
+        catch (Exception e)
+        {
+            // 這裡若出錯主要是來自 SckSs[Scki] 出問題, 可能是自己 Close, 也可能是 Client 斷線, 自己加判斷吧~
+            MonoBehaviour.print("Exception("+e+"), 可能原因:SckSs[Scki] 出問題, 可能是自己 Close, 也可能是 Client 斷線");
+        }
+
+    }
+
+    // Server 傳送資料給所有Client
+    private void SckSSend(string SendS)
+    {
+        for (int Scki = 1; Scki <= SckSs.Length - 1; Scki++)
+        {
+            if (null != SckSs[Scki] && SckSs[Scki].Connected == true)
+            {
+                try
+                {
+                    // SendS 在這裡為 string 型態, 為 Server 要傳給 Client 的字串
+                    SckSs[Scki].Send(Encoding.ASCII.GetBytes(SendS));
+                }
+                catch (Exception e)
+                {
+                    // 這裡出錯, 主要是出在 SckSs[Scki] 出問題, 自己加判斷吧~
+                    MonoBehaviour.print("Exception(" + e + "), SendS("+ SendS + "), 錯誤可能原因:SckSs[Scki] 出問題");
+                }
+            }
+        }
+    }
+
+}
